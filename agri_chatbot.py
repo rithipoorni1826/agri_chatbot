@@ -1,215 +1,191 @@
-import sqlite3
-import whisper
-import pyaudio
-import wave
-from datetime import datetime
-from transformers import pipeline
-from geopy.geocoders import Nominatim
-import requests
 import os
-import re
+import tempfile
+import requests
+import sounddevice as sd
+import soundfile as sf
+import matplotlib.pyplot as plt
+import numpy as np
+from playsound import playsound
+from deepgram import DeepgramClient, PrerecordedOptions, SpeakOptions
+from google import genai
+from dotenv import load_dotenv
+import time
 
-# Initialize Whisper model
-try:
-    whisper_model = whisper.load_model("tiny")
-except Exception as e:
-    print(f"Error loading Whisper model: {e}. Ensure ffmpeg is installed and in PATH.")
-    exit(1)
+# ---------------------------
+# Load API keys and initialize clients
+# ---------------------------
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 
-# Initialize Hugging Face pipeline
-try:
-    llm = pipeline("text2text-generation", model="google/flan-t5-base")
-    translator = pipeline("translation", model="facebook/m2m100_418M")
-except Exception as e:
-    print(f"Error loading Hugging Face model: {e}")
-    exit(1)
+client = genai.Client(api_key=GEMINI_API_KEY)
+deepgram = DeepgramClient(api_key=DEEPGRAM_API_KEY)
 
-# Initialize SQLite database
-def init_db():
-    with sqlite3.connect("agri.db") as conn:
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS query_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            query TEXT,
-            response TEXT,
-            feedback INTEGER,
-            timestamp TEXT
-        )
-        """)
-        conn.commit()
+# ---------------------------
+# Audio Recording Settings
+# ---------------------------
+SAMPLE_RATE = 16000
+CHANNELS = 1
+DURATION = 5  # seconds per recording
 
-# Language detection
-def detect_language(text):
-    if re.search(r'[\u0D00-\u0D7F]', text):
-        return "malayalam"
-    return "english"
-
-# Weather API
-def get_weather(location):
-    api_key = os.getenv("OPENWEATHER_API_KEY")
-    if not api_key:
-        return "Weather data unavailable: API key not set."
-    try:
-        url = f"https://api.openweathermap.org/data/2.5/weather?q={location}&appid={api_key}"
-        response = requests.get(url).json()
-        if response.get("cod") != 200:
-            # Fallback to Kerala if location not found
-            url = f"https://api.openweathermap.org/data/2.5/weather?q=Kerala&appid={api_key}"
-            response = requests.get(url).json()
-            if response.get("cod") != 200:
-                return f"Weather data unavailable: {response.get('message', 'Unknown error')}"
-        return response.get("weather", [{}])[0].get("description", "N/A")
-    except Exception as e:
-        return f"Weather data unavailable: {str(e)}"
-
-# Location detection
-geolocator = Nominatim(user_agent="agri_chatbot")
-def get_location(query):
-    try:
-        location = geolocator.geocode(query, country_codes="IN")
-        return location.address if location else "Kerala"
-    except:
-        return "Kerala"
-
-# Record audio
-def record_audio(filename="temp.wav", duration=5):
-    try:
-        p = pyaudio.PyAudio()
-        stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1024)
-        print("Recording... Speak now.")
-        frames = []
-        for _ in range(0, int(16000 / 1024 * duration)):
-            data = stream.read(1024, exception_on_overflow=False)
-            frames.append(data)
-        print("Recording stopped.")
-        stream.stop_stream()
-        stream.close()
-        p.terminate()
-        wf = wave.open(filename, "wb")
-        wf.setnchannels(1)
-        wf.setsampwidth(p.get_sample_size(pyaudio.paInt16))
-        wf.setframerate(16000)
-        wf.writeframes(b"".join(frames))
-        wf.close()
-        return filename
-    except Exception as e:
-        print(f"Error recording audio: {e}")
+# ---------------------------
+# Helper Functions
+# ---------------------------
+def record_audio(duration=DURATION):
+    """Record audio from microphone and visualize waveform."""
+    print(f"🎤 Recording for {duration} seconds...")
+    audio = sd.rec(int(duration * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=CHANNELS)
+    sd.wait()
+    
+    # Create temporary file and ensure it's closed after writing
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    sf.write(tmp_file.name, audio, SAMPLE_RATE, format='WAV', subtype='PCM_16')
+    tmp_file.close()
+    
+    # Verify file exists
+    if not os.path.exists(tmp_file.name):
+        print(f"Error: Audio file {tmp_file.name} was not created.")
         return None
-
-# Transcribe audio
-def transcribe_audio(audio_file, lang):
+    
+    # Check audio level
+    audio_data, _ = sf.read(tmp_file.name)
+    max_amplitude = np.max(np.abs(audio_data))
+    print(f"Audio level: Max amplitude = {max_amplitude:.4f}")
+    if max_amplitude < 0.01:
+        print("Warning: Audio is too quiet. Speak louder next time.")
+    
+    # Play back to confirm audio
     try:
-        result = whisper_model.transcribe(audio_file, language="ml" if lang == "malayalam" else "en")
-        os.remove(audio_file)
-        return result["text"]
+        print(f"Playing back recorded audio: {tmp_file.name}")
+        playsound(tmp_file.name.replace('\\', '/'))
     except Exception as e:
-        print(f"Error transcribing audio: {e}")
+        print(f"Error playing audio: {e}")
+    
+    # Visualize waveform
+    try:
+        plt.figure(figsize=(10, 4))
+        time_axis = np.linspace(0, duration, len(audio_data))
+        plt.plot(time_axis, audio_data[:, 0] if audio_data.ndim > 1 else audio_data, color='blue')
+        plt.title("Recorded Audio Waveform")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Amplitude")
+        plt.grid(True)
+        plt.show(block=False)
+        plt.pause(2)
+        plt.close()
+    except Exception as e:
+        print(f"Error visualizing waveform: {e}")
+    
+    return tmp_file.name
+
+def transcribe_audio(audio_file):
+    """Transcribe audio using Deepgram Speech-to-Text with retry mechanism."""
+    if not os.path.exists(audio_file):
+        print(f"Error: Audio file {audio_file} does not exist.")
         return ""
 
-# Process query
-def process_query(query, lang, user_id):
-    location = get_location(query)
-    weather = get_weather(location)
-    season = datetime.now().strftime("%B")  # September 2025
-    context = f"Location: {location}, Weather: {weather}, Season: {season}"
-
-    # Translate Malayalam to English
-    if lang == "malayalam":
+    max_retries = 3
+    retry_delay = 5  # Increased delay to handle timeouts
+    for attempt in range(max_retries):
         try:
-            query_en = translator(query, src_lang="ml", tgt_lang="en")[0]["generated_text"]
-        except:
-            query_en = query
-    else:
-        query_en = query
+            print(f"Attempting to transcribe {audio_file}, size: {os.path.getsize(audio_file)} bytes")
+            with open(audio_file, "rb") as audio:
+                source = {"buffer": audio}
+                options = PrerecordedOptions(
+                    model="nova-2",
+                    language="en-IN",  # English (Indian accent)
+                    smart_format=True
+                )
+                response = deepgram.listen.rest.v("1").transcribe_file(source, options)
+                print("DEBUG Deepgram STT full response:", response)
+                transcript = response["results"]["channels"][0]["alternatives"][0]["transcript"]
+                if not transcript:
+                    print("WARNING: Empty transcript from Deepgram Speech-to-Text.")
+                return transcript.strip()
+        except Exception as e:
+            print(f"Deepgram Speech-to-Text error (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                print("Max retries reached. Transcription failed.")
+                return ""
 
-    # Enhanced prompt
-    prompt = (
-        f"You are an expert in Kerala's agriculture, knowledgeable about crops, farming techniques, and local practices. "
-        f"Provide a concise, practical answer to the query, focusing on actionable farming advice. "
-        f"Query: {query_en}. Context: {context}"
+def generate_text(prompt):
+    """Generate text response from Gemini."""
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
     )
+    return response.text
 
+def generate_speech(text, lang='en'):
+    """Generate speech using Deepgram Text-to-Speech and play it."""
     try:
-        result = llm(prompt, max_new_tokens=256)
-        response = result[0]["generated_text"]
-        confidence = 0.8  # Adjusted for flan-t5-base
-        if lang == "malayalam":
+        options = SpeakOptions(
+            model="aura-asteria-en",  # English TTS model
+            encoding="mp3",
+            sample_rate=44100
+        )
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        response = deepgram.speak.v("1").stream(
+            {"text": text},
+            options
+        )
+        with open(tmp_file.name, "wb") as f:
+            f.write(response.stream.getvalue())
+        
+        playsound(tmp_file.name.replace('\\', '/'))
+        os.unlink(tmp_file.name)
+    except Exception as e:
+        print(f"Deepgram Text-to-Speech error: {e}")
+
+# ---------------------------
+# Main Chatbot Loop
+# ---------------------------
+def chatbot():
+    print("🤖 Welcome to Kerala Agri Chatbot!")
+    print("Note: Voice mode currently supports English only due to Deepgram limitations.")
+    while True:
+        mode = input("Choose input mode: [1] Voice, [2] Text, [q] Quit: ").strip().lower()
+        if mode == 'q':
+            print("Goodbye!")
+            break
+        elif mode == '1':
+            audio_file = record_audio()
+            if audio_file is None:
+                print("Failed to record audio. Try again.")
+                continue
+            user_input = transcribe_audio(audio_file)
+            print(f"🗣 You said: {user_input}")
             try:
-                response = translator(response, src_lang="en", tgt_lang="ml")[0]["generated_text"]
+                os.unlink(audio_file)
             except:
                 pass
-    except Exception as e:
-        response = f"Error generating response: {e}"
-        confidence = 0.1
+        elif mode == '2':
+            user_input = input("You: ").strip()
+        else:
+            print("Invalid option.")
+            continue
 
-    # Escalation
-    if confidence < 0.7 or "unknown" in response.lower() or len(response.strip()) < 10:
-        with open("escalated_queries.txt", "a", encoding="utf-8") as f:
-            f.write(f"Query: {query}\nContext: {context}\nSuggested Response: {response}\n\n")
-        escalation_msg = (
-            "നിന്റെ ചോദ്യം സങ്കീർണ്ണമാണ്, കാർഷിക ഓഫീസർക്ക് കൈമാറിയിരിക്കുന്നു."
-            if lang == "malayalam"
-            else "Your query is complex and has been escalated to an agricultural officer."
-        )
-        response += f"\n\n{escalation_msg}"
+        if not user_input:
+            print("No input detected. For voice, ensure you're speaking clearly in English.")
+            continue
 
-    return response, confidence
+        print("🔎 Asking Gemini...")
+        try:
+            bot_response = generate_text(user_input)
+            print("🤖 Bot:", bot_response)
+            lang = 'en'  # Deepgram TTS supports English; Malayalam not supported
+            print("🔊 Speaking...")
+            generate_speech(bot_response, lang=lang)
+        except Exception as e:
+            print(f"Error: {e}")
 
-# Log query
-def log_query(user_id, query, response, confidence):
-    with sqlite3.connect("agri.db") as conn:
-        conn.execute(
-            "INSERT INTO query_logs (user_id, query, response, feedback, timestamp) VALUES (?, ?, ?, ?, ?)",
-            (user_id, query, response, None, datetime.now().isoformat())
-        )
-        conn.commit()
-
-# Main function
-def main():
-    init_db()
-    user_id = "farmer_001"
-    print("Agriculture Chatbot (കാർഷിക ചാറ്റ്ബോട്ട്) - September 20, 2025")
-    print("Ask questions via text or voice (type 'voice' to record).")
-    print("Type 'exit' to quit.")
-    print("For voice input, speak clearly for 5 seconds.")
-
-    while True:
-        print("\nYou: ", end="")
-        user_input = input().strip()
-
-        if user_input.lower() == "exit":
-            print("Bot: Goodbye!")
-            break
-
-        query = user_input
-        lang = detect_language(query)
-
-        if user_input.lower() == "voice":
-            audio_file = record_audio()
-            if audio_file:
-                query = transcribe_audio(audio_file, lang)
-                if not query:
-                    print("Bot: Could not transcribe audio. Please try again.")
-                    continue
-            else:
-                print("Bot: Audio recording failed. Please try again.")
-                continue
-
-        response, confidence = process_query(query, lang, user_id)
-        log_query(user_id, query, response, confidence)
-
-        print(f"Bot: {response}")
-
-        print("Was this helpful? (1 for yes, 0 for no, or skip): ", end="")
-        feedback = input().strip()
-        if feedback in ["1", "0"]:
-            with sqlite3.connect("agri.db") as conn:
-                conn.execute(
-                    "UPDATE query_logs SET feedback = ? WHERE id = (SELECT MAX(id) FROM query_logs)",
-                    (int(feedback),)
-                )
-                conn.commit()
-
+# ---------------------------
+# Entry Point
+# ---------------------------
 if __name__ == "__main__":
-    main()
+    print("DEEPGRAM_API_KEY:", "Set" if os.getenv("DEEPGRAM_API_KEY") else "Not set")
+    print("GEMINI_API_KEY:", "Set" if os.getenv("GEMINI_API_KEY") else "Not set")
+    chatbot()

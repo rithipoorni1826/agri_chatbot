@@ -1,0 +1,44 @@
+Query: Which crop is best to plant on winter?
+Context: Location: Kerala, Weather: N/A, Season: September
+Suggested Response: Weather: N/A, Season: September
+
+Query: Tell me about rubber?
+Context: Location: Kerala, Weather: N/A, Season: September
+Suggested Response: Weather: N/A, Season: September
+
+Query: Which weather climate now?
+Context: Location: Kerala, Weather: N/A, Season: September
+Suggested Response: Weather: N/A, Season: September
+
+Query: which climate is suitable for rubber?
+Context: Location: Kerala, Weather: N/A, Season: September
+Suggested Response: Weather: N/A, Season: September
+
+Query: hi
+Context: Location: Hi, Old Club Road, Gandhi chowk, Khammam, Khammam Urban mandal, Khammam, Telangana, 507003, India, Weather: overcast clouds, Season: September
+Suggested Response: Hi, Old Club Road, Gandhi chowk, Khammam, Khammam Urban mandal, Khammam, Telangana, 507003, India
+
+Query: Give me the current weather in India?
+Context: Location: Kerala, Weather: overcast clouds, Season: September
+Suggested Response: Weather: overcast clouds
+
+Query: Which crop is best to cultivate in summer for kerala region?
+Context: Location: Kerala, Weather: overcast clouds, Season: September
+Suggested Response: Weather: overcast clouds
+
+Query: crop name?
+Context: Location: Kerala, Weather: overcast clouds, Season: September
+Suggested Response: crop name?
+
+Query:  And
+Context: Location: AND, Velachery Main Road, TNHB Colony, CMWSSB Division 174, Zone 13 Adyar, Chennai, Tamil Nadu, 600042, India, Weather: Weather data unavailable, Season: September
+Suggested Response: And, Velachery Main Road, TNHB Colony, CMWSSB Division 174, Zone 13 Adyar, Chennai, Tamil Nadu, 600042, India, Weather: Weather data unavailable, Season: September
+
+Query: What date is today?
+Context: Location: Kerala, Weather: overcast clouds, Season: September
+Suggested Response: September
+
+Query: which crop is best for summer?
+Context: Location: Kerala, Weather: overcast clouds, Season: September
+Suggested Response: apricots
+
