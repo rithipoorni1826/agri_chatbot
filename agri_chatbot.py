@@ -1,15 +1,18 @@
 import os
 import tempfile
+import asyncio
 import requests
 import sounddevice as sd
 import soundfile as sf
 import matplotlib.pyplot as plt
 import numpy as np
-from playsound import playsound
+import pygame
 from deepgram import DeepgramClient, PrerecordedOptions, SpeakOptions
 from google import genai
 from dotenv import load_dotenv
+from datetime import datetime
 import time
+import logging
 
 # ---------------------------
 # Load API keys and initialize clients
@@ -18,8 +21,15 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 
+if not GEMINI_API_KEY or not DEEPGRAM_API_KEY:
+    print("Error: API keys not set. Please check your .env file.")
+    exit(1)
+
 client = genai.Client(api_key=GEMINI_API_KEY)
 deepgram = DeepgramClient(api_key=DEEPGRAM_API_KEY)
+
+# Initialize pygame mixer
+pygame.mixer.init()
 
 # ---------------------------
 # Audio Recording Settings
@@ -31,13 +41,25 @@ DURATION = 5  # seconds per recording
 # ---------------------------
 # Helper Functions
 # ---------------------------
+def play_audio(file_path):
+    """Play audio file using pygame."""
+    try:
+        pygame.mixer.music.load(file_path)
+        pygame.mixer.music.play()
+        while pygame.mixer.music.get_busy():  # Wait for playback to finish
+            pygame.time.Clock().tick(10)
+    except Exception as e:
+        print(f"Error playing audio with pygame: {e}")
+    finally:
+        pygame.mixer.music.unload()
+
 def record_audio(duration=DURATION):
     """Record audio from microphone and visualize waveform."""
     print(f"🎤 Recording for {duration} seconds...")
     audio = sd.rec(int(duration * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=CHANNELS)
     sd.wait()
     
-    # Create temporary file and ensure it's closed after writing
+    # Create temporary file
     tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     sf.write(tmp_file.name, audio, SAMPLE_RATE, format='WAV', subtype='PCM_16')
     tmp_file.close()
@@ -57,7 +79,7 @@ def record_audio(duration=DURATION):
     # Play back to confirm audio
     try:
         print(f"Playing back recorded audio: {tmp_file.name}")
-        playsound(tmp_file.name.replace('\\', '/'))
+        play_audio(os.path.normpath(tmp_file.name))
     except Exception as e:
         print(f"Error playing audio: {e}")
     
@@ -85,7 +107,7 @@ def transcribe_audio(audio_file):
         return ""
 
     max_retries = 3
-    retry_delay = 5  # Increased delay to handle timeouts
+    retry_delay = 5
     for attempt in range(max_retries):
         try:
             print(f"Attempting to transcribe {audio_file}, size: {os.path.getsize(audio_file)} bytes")
@@ -93,7 +115,7 @@ def transcribe_audio(audio_file):
                 source = {"buffer": audio}
                 options = PrerecordedOptions(
                     model="nova-2",
-                    language="en-IN",  # English (Indian accent)
+                    language="en-IN",
                     smart_format=True
                 )
                 response = deepgram.listen.rest.v("1").transcribe_file(source, options)
@@ -113,32 +135,54 @@ def transcribe_audio(audio_file):
 
 def generate_text(prompt):
     """Generate text response from Gemini."""
+    # Handle greetings
+    if prompt.lower().strip() in ["hello", "hello?", "hi", "hi.", "hiiiii"]:
+        return "Hi! I'm your Kerala Agri Chatbot. Ask me about farming, weather, or anything else!"
+    
+    # Include current date for date-related queries
+    if "today" in prompt.lower():
+        current_date = datetime.now().strftime("%A, %B %d, %Y")
+        prompt = f"{prompt} (Current date is {current_date})"
+    
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt
     )
     return response.text
 
-def generate_speech(text, lang='en'):
-    """Generate speech using Deepgram Text-to-Speech and play it."""
+async def async_generate_speech(text, filename):
+    """Async helper to generate speech using Deepgram TTS."""
     try:
         options = SpeakOptions(
-            model="aura-asteria-en",  # English TTS model
-            encoding="mp3",
-            sample_rate=44100
+            model="aura-asteria-en",
+            encoding="mp3"
         )
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-        response = deepgram.speak.v("1").stream(
-            {"text": text},
-            options
-        )
-        with open(tmp_file.name, "wb") as f:
-            f.write(response.stream.getvalue())
-        
-        playsound(tmp_file.name.replace('\\', '/'))
-        os.unlink(tmp_file.name)
+        payload = {"text": text}
+        response = await deepgram.speak.asyncrest.v("1").save(filename, payload, options)
+        print(f"TTS Response: {response.to_json(indent=4)}")
+    except Exception as e:
+        print(f"Deepgram TTS async error: {e}")
+        raise
+
+def generate_speech(text, lang='en'):
+    """Generate speech using Deepgram Text-to-Speech and play it."""
+    if lang != 'en':
+        print("Warning: Only English TTS supported.")
+    filename = tempfile.mktemp(suffix=".mp3")
+    try:
+        asyncio.run(async_generate_speech(text, filename))
+        if os.path.exists(filename):
+            play_audio(os.path.normpath(filename))
+        else:
+            print("Error: Audio file was not generated.")
     except Exception as e:
         print(f"Deepgram Text-to-Speech error: {e}")
+    finally:
+        if os.path.exists(filename):
+            try:
+                os.unlink(filename)
+            except Exception as e:
+                print(f"Failed to delete temporary file {filename}: {e}")
 
 # ---------------------------
 # Main Chatbot Loop
@@ -160,8 +204,8 @@ def chatbot():
             print(f"🗣 You said: {user_input}")
             try:
                 os.unlink(audio_file)
-            except:
-                pass
+            except Exception as e:
+                print(f"Failed to delete temporary file {audio_file}: {e}")
         elif mode == '2':
             user_input = input("You: ").strip()
         else:
@@ -176,7 +220,7 @@ def chatbot():
         try:
             bot_response = generate_text(user_input)
             print("🤖 Bot:", bot_response)
-            lang = 'en'  # Deepgram TTS supports English; Malayalam not supported
+            lang = 'en'
             print("🔊 Speaking...")
             generate_speech(bot_response, lang=lang)
         except Exception as e:
