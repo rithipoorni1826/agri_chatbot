@@ -36,7 +36,7 @@ pygame.mixer.init()
 # ---------------------------
 SAMPLE_RATE = 16000
 CHANNELS = 1
-DURATION = 5  # seconds per recording
+DURATION = 20  # seconds per recording
 
 # ---------------------------
 # Helper Functions
@@ -144,6 +144,9 @@ def generate_text(prompt):
         current_date = datetime.now().strftime("%A, %B %d, %Y")
         prompt = f"{prompt} (Current date is {current_date})"
     
+    # Add instruction to keep responses concise
+    prompt = f"{prompt} Please keep the response concise and under 2000 characters."
+    
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt
@@ -168,6 +171,33 @@ def generate_speech(text, lang='en'):
     """Generate speech using Deepgram Text-to-Speech and play it."""
     if lang != 'en':
         print("Warning: Only English TTS supported.")
+    
+    MAX_CHAR_LIMIT = 2000  # Deepgram's character limit
+    
+    # Truncate or split text if it exceeds the limit
+    if len(text) > MAX_CHAR_LIMIT:
+        print(f"Warning: Text exceeds {MAX_CHAR_LIMIT} characters ({len(text)}). Truncating to fit.")
+        text = text[:MAX_CHAR_LIMIT]  # Simple truncation
+        # Alternatively, for splitting into chunks (uncomment if preferred):
+        # chunks = [text[i:i+MAX_CHAR_LIMIT] for i in range(0, len(text), MAX_CHAR_LIMIT)]
+        # for i, chunk in enumerate(chunks):
+        #     filename = tempfile.mktemp(suffix=f"_{i}.mp3")
+        #     try:
+        #         asyncio.run(async_generate_speech(chunk, filename))
+        #         if os.path.exists(filename):
+        #             play_audio(os.path.normpath(filename))
+        #         else:
+        #             print(f"Error: Audio file {filename} was not generated.")
+        #     except Exception as e:
+        #         print(f"Deepgram Text-to-Speech error for chunk {i}: {e}")
+        #     finally:
+        #         if os.path.exists(filename):
+        #             try:
+        #                 os.unlink(filename)
+        #             except Exception as e:
+        #                 print(f"Failed to delete temporary file {filename}: {e}")
+        # return  # Exit after processing chunks
+
     filename = tempfile.mktemp(suffix=".mp3")
     try:
         asyncio.run(async_generate_speech(text, filename))
@@ -220,6 +250,7 @@ def chatbot():
         try:
             bot_response = generate_text(user_input)
             print("🤖 Bot:", bot_response)
+            print(f"Response length: {len(bot_response)} characters")
             lang = 'en'
             print("🔊 Speaking...")
             generate_speech(bot_response, lang=lang)
